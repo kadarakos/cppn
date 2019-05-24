@@ -15,7 +15,7 @@ parser.add_argument('--random_seed', type=int, default=1,
                     help='random seed')
 parser.add_argument('--dim', type=int, default=500)
 parser.add_argument('--cchannel', type=int, default=3)
-parser.add_argument('--z_type', choices=['uniform', 'normal', 'none', 'sphere', 'gradual-normal'], default='normal')
+parser.add_argument('--z_type', choices=['uniform', 'normal', 'none', 'sphere', 'gradual-normal', 'long-normal'], default='normal')
 parser.add_argument('--z_dim', type=int, default=32)
 parser.add_argument('--scaling', type=int, default=8)
 parser.add_argument('--layer_size', type=int, default=32)
@@ -26,6 +26,19 @@ args = parser.parse_args()
 print(args)
 np.random.seed(args.random_seed)
 torch.manual_seed(args.random_seed)
+
+def gen_sequence(z1, z2, n, size):
+    delta = (z2-z1) / (n+1)
+    total = n + 2
+    z = np.zeros((total, size))
+    for i in range(total):
+        if i == 0:
+            z[i] = z1
+        elif i == total - 1:
+            z[i] = z2
+        else:
+            z[i] = z1 + delta * float(i)
+    return np.expand_dims(z, axis=1)
 
 def sample_z(method, frames, size):
     if method == 'uniform':
@@ -40,20 +53,23 @@ def sample_z(method, frames, size):
         radius = np.sqrt((normal_deviates**2).sum(axis=0))
         points = normal_deviates/radius
         z = np.expand_dims(points, axis=1)
+    # Creates a smooth sequence of frames + 2 noise vectors
     elif method == "gradual-normal":
         total_frames = frames + 2
-        z = np.zeros((total_frames, size))
         z1 =  np.random.standard_normal(size=size).astype(np.float32)
         z2 =  np.random.standard_normal(size=size).astype(np.float32)
-        delta = (z2-z1) / (frames+1)
-        for i in range(total_frames):
-            if i == 0:
-                z[i] = z1
-            elif i == total_frames - 1:
-                z[i] = z2
-            else:
-                z[i] = z1 + delta * float(i)
-        z = np.expand_dims(z, axis=1)
+        z = gen_sequence(z1, z2, frames, size)
+    # Generate (frames + 2) * frames 
+    elif method == "long-normal":
+        Z = []
+        z1 =  np.random.standard_normal(size=size).astype(np.float32)
+        for i in range(frames):
+            z2 =  np.random.standard_normal(size=size).astype(np.float32)
+            z = gen_sequence(z1, z2, frames, size)
+            Z.append(z)
+            z1 = z2
+        z = np.concatenate(Z, axis=0)
+           
     return z
 
 
@@ -99,8 +115,6 @@ class CPPN(nn.Module):
         self.relu = nn.ReLU()
         self.custom = CustomActivationFunction()
         self.activations = [self.tanh, self.softsign, self.custom, self.relu]
-        #self.lin_seq = nn.Sequential(self.tanh, self.linear5, self.tanh, self.linear6, self.tanh,
-        #                         self.linear7, self.tanh, self.linear8, self.sigmoid)
         self.lin_seq = nn.Sequential()
         self.lin_list = [self.linear1, self.linear2, self.linear3, self.linear4]
         self.lin_list += [nn.Linear(self.net_size, self.net_size) for x in range(self.num_hidden)]
@@ -183,7 +197,7 @@ if __name__ == "__main__":
     x, y, r = get_coordinates(x_dim = args.dim, y_dim = args.dim, scale = args.scaling)   
     z = sample_z(args.z_type, args.num_frames, args.z_dim)
     with imageio.get_writer('movie.mp4', mode='I') as writer:
-        for i in range(args.num_frames):
+        for i in range(z.shape[0]):
             print(i)
             z_scaled = V(torch.from_numpy(np.matmul(np.ones((args.dim*args.dim, 1)), z[i])).float())
             result = model.forward(x, y, r, z_scaled).squeeze(0).view(args.dim, args.dim, args.cchannel).data.numpy()
