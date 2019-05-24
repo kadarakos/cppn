@@ -7,6 +7,8 @@ import matplotlib
 from pylab import savefig
 import numpy as np
 import imageio
+from layers import CustomActivationFunction
+from layers import NoisyLinear
 
 parser = argparse.ArgumentParser(description='Create a Simple CPPN')
 
@@ -28,6 +30,8 @@ np.random.seed(args.random_seed)
 torch.manual_seed(args.random_seed)
 
 def gen_sequence(z1, z2, n, size):
+    # Generate unequal number of frames for nicer feel
+    n = np.random.randint(n, 2*n)
     delta = (z2-z1) / (n+1)
     total = n + 2
     z = np.zeros((total, size))
@@ -66,28 +70,12 @@ def sample_z(method, frames, size):
         for i in range(frames):
             z2 =  np.random.standard_normal(size=size).astype(np.float32)
             z = gen_sequence(z1, z2, frames, size)
-            Z.append(z)
+            Z.append(z[:-1, :])
             z1 = z2
         z = np.concatenate(Z, axis=0)
-           
+        print(z.shape)
     return z
 
-
-class CustomActivationFunction(nn.Module):
-
-    def __init__(self, mean=0, std=1, min=-0.9, max=0.9):
-        super(CustomActivationFunction, self).__init__()
-        self.mean = mean
-        self.std = std
-        self.min = min
-        self.max = max
-        self.gauss = lambda x: torch.exp((-(x - self.mean) ** 2)/(2* self.std ** 2))
-        self.cos = torch.cos
-        self.func = np.random.choice([self.gauss, self.cos])
-    
-    def forward(self, x):
-        x = self.func(x)
-        return torch.clamp(x, min=self.min, max=self.max)
 
     
 
@@ -103,11 +91,11 @@ class CPPN(nn.Module):
         self.z_dim = z_dim
         self.num_hidden = num_hidden
         #Build NN graph
-        self.linear1 = nn.Linear(z_dim, self.net_size)
-        self.linear2 = nn.Linear(1, self.net_size, bias=False)
-        self.linear3 = nn.Linear(1, self.net_size, bias=False)
-        self.linear4 = nn.Linear(1, self.net_size, bias=False)        
-        self.linear8 = nn.Linear(self.net_size, self.c_dim)
+        self.linear1 = NoisyLinear(z_dim, self.net_size)
+        self.linear2 = NoisyLinear(1, self.net_size, bias=True)
+        self.linear3 = NoisyLinear(1, self.net_size, bias=True)
+        self.linear4 = NoisyLinear(1, self.net_size, bias=True)        
+        self.linear8 = NoisyLinear(self.net_size, self.c_dim)
         
         self.tanh = nn.Tanh()
         self.sigmoid = nn.Sigmoid()
@@ -192,15 +180,15 @@ def save_image(image_data, f, c_dim = 1):
     return fname
 
 if __name__ == "__main__":
-   
-    model = CPPN(x_dim = args.dim, y_dim = args.dim, c_dim = args.cchannel, z_dim = args.z_dim, net_size = args.layer_size, num_hidden = args.num_hidden)
-    x, y, r = get_coordinates(x_dim = args.dim, y_dim = args.dim, scale = args.scaling)   
-    z = sample_z(args.z_type, args.num_frames, args.z_dim)
-    with imageio.get_writer('movie.mp4', mode='I') as writer:
-        for i in range(z.shape[0]):
-            print(i)
-            z_scaled = V(torch.from_numpy(np.matmul(np.ones((args.dim*args.dim, 1)), z[i])).float())
-            result = model.forward(x, y, r, z_scaled).squeeze(0).view(args.dim, args.dim, args.cchannel).data.numpy()
-            fname = save_image(result, i, c_dim = args.cchannel)
-            image = imageio.imread(fname)
-            writer.append_data(image)
+    with torch.no_grad():
+        model = CPPN(x_dim = args.dim, y_dim = args.dim, c_dim = args.cchannel, z_dim = args.z_dim, net_size = args.layer_size, num_hidden = args.num_hidden)
+        x, y, r = get_coordinates(x_dim = args.dim, y_dim = args.dim, scale = args.scaling)   
+        z = sample_z(args.z_type, args.num_frames, args.z_dim)
+        with imageio.get_writer('movie.mp4', mode='I') as writer:
+            for i in range(z.shape[0]):
+                print(i)
+                z_scaled = V(torch.from_numpy(np.matmul(np.ones((args.dim*args.dim, 1)), z[i])).float())
+                result = model.forward(x, y, r, z_scaled).squeeze(0).view(args.dim, args.dim, args.cchannel).data.numpy()
+                fname = save_image(result, i, c_dim = args.cchannel)
+                image = imageio.imread(fname)
+                writer.append_data(image)
