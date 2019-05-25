@@ -23,6 +23,7 @@ parser.add_argument('--scaling', type=int, default=8)
 parser.add_argument('--layer_size', type=int, default=32)
 parser.add_argument('--num_hidden', type=int, default=3)
 parser.add_argument('--num_frames', type=int, default=1)
+parser.add_argument('--parameter_noise', action='store_true')
 
 args = parser.parse_args()
 print(args)
@@ -80,7 +81,8 @@ def sample_z(method, frames, size):
     
 
 class CPPN(nn.Module):
-    def __init__(self, x_dim, y_dim, batch_size=1, z_dim = 32, c_dim = 1, scale = 1.0, net_size = 32, num_hidden = 4):
+    def __init__(self, x_dim, y_dim, batch_size=1, z_dim = 32, c_dim = 1, scale = 1.0,
+                 net_size = 32, num_hidden = 4, parameter_noise=False):
         super(CPPN, self).__init__()
         self.batch_size = batch_size
         self.net_size = net_size
@@ -90,12 +92,13 @@ class CPPN(nn.Module):
         self.c_dim = c_dim
         self.z_dim = z_dim
         self.num_hidden = num_hidden
+        self.parameter_noise = parameter_noise
         #Build NN graph
-        self.linear1 = NoisyLinear(z_dim, self.net_size)
-        self.linear2 = NoisyLinear(1, self.net_size, bias=True)
-        self.linear3 = NoisyLinear(1, self.net_size, bias=True)
-        self.linear4 = NoisyLinear(1, self.net_size, bias=True)        
-        self.linear8 = NoisyLinear(self.net_size, self.c_dim)
+        self.linear1 = nn.Linear(z_dim, self.net_size)
+        self.linear2 = nn.Linear(1, self.net_size, bias=True)
+        self.linear3 = nn.Linear(1, self.net_size, bias=True)
+        self.linear4 = nn.Linear(1, self.net_size, bias=True)        
+        self.linear8 = nn.Linear(self.net_size, self.c_dim)
         
         self.tanh = nn.Tanh()
         self.sigmoid = nn.Sigmoid()
@@ -105,7 +108,11 @@ class CPPN(nn.Module):
         self.activations = [self.tanh, self.softsign, self.custom, self.relu]
         self.lin_seq = nn.Sequential()
         self.lin_list = [self.linear1, self.linear2, self.linear3, self.linear4]
-        self.lin_list += [nn.Linear(self.net_size, self.net_size) for x in range(self.num_hidden)]
+        for i in range(self.num_hidden):
+            if self.parameter_noise:
+                self.lin_list.append(NoisyLinear(self.net_size, self.net_size))
+            else:
+                self.lin_list.append(nn.Linear(self.net_size, self.net_size))
         self.lin_list += [self.linear8]
         #self.lin_list = [self.linear1, self.linear2, self.linear3, self.linear4, self.linear5, self.linear6, 
         #            self.linear7, self.linear8]
@@ -181,7 +188,8 @@ def save_image(image_data, f, c_dim = 1):
 
 if __name__ == "__main__":
     with torch.no_grad():
-        model = CPPN(x_dim = args.dim, y_dim = args.dim, c_dim = args.cchannel, z_dim = args.z_dim, net_size = args.layer_size, num_hidden = args.num_hidden)
+        model = CPPN(x_dim = args.dim, y_dim = args.dim, c_dim = args.cchannel, z_dim = args.z_dim, 
+                     net_size = args.layer_size, num_hidden = args.num_hidden, parameter_noise=args.parameter_noise)
         x, y, r = get_coordinates(x_dim = args.dim, y_dim = args.dim, scale = args.scaling)   
         z = sample_z(args.z_type, args.num_frames, args.z_dim)
         with imageio.get_writer('movie.mp4', mode='I') as writer:
